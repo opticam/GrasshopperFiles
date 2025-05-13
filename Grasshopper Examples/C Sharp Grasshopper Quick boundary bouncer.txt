@@ -1,0 +1,193 @@
+using System;
+using System.Collections;
+using System.Collections.Generic;
+
+using Rhino;
+using Rhino.Geometry;
+
+using Grasshopper;
+using Grasshopper.Kernel;
+using Grasshopper.Kernel.Data;
+using Grasshopper.Kernel.Types;
+
+
+
+/// <summary>
+/// This class will be instantiated on demand by the Script component.
+/// </summary>
+public class Script_Instance : GH_ScriptInstance
+{
+#region Utility functions
+  /// <summary>Print a String to the [Out] Parameter of the Script component.</summary>
+  /// <param name="text">String to print.</param>
+  private void Print(string text) { /* Implementation hidden. */ }
+  /// <summary>Print a formatted String to the [Out] Parameter of the Script component.</summary>
+  /// <param name="format">String format.</param>
+  /// <param name="args">Formatting parameters.</param>
+  private void Print(string format, params object[] args) { /* Implementation hidden. */ }
+  /// <summary>Print useful information about an object instance to the [Out] Parameter of the Script component. </summary>
+  /// <param name="obj">Object instance to parse.</param>
+  private void Reflect(object obj) { /* Implementation hidden. */ }
+  /// <summary>Print the signatures of all the overloads of a specific method to the [Out] Parameter of the Script component. </summary>
+  /// <param name="obj">Object instance to parse.</param>
+  private void Reflect(object obj, string method_name) { /* Implementation hidden. */ }
+#endregion
+
+#region Members
+  /// <summary>Gets the current Rhino document.</summary>
+  private readonly RhinoDoc RhinoDocument;
+  /// <summary>Gets the Grasshopper document that owns this script.</summary>
+  private readonly GH_Document GrasshopperDocument;
+  /// <summary>Gets the Grasshopper script component that owns this script.</summary>
+  private readonly IGH_Component Component;
+  /// <summary>
+  /// Gets the current iteration count. The first call to RunScript() is associated with Iteration==0.
+  /// Any subsequent call within the same solution will increment the Iteration count.
+  /// </summary>
+  private readonly int Iteration;
+#endregion
+
+  /// <summary>
+  /// This procedure contains the user code. Input parameters are provided as regular arguments,
+  /// Output parameters as ref arguments. You don't have to assign output parameters,
+  /// they will have a default value.
+  /// </summary>
+  private void RunScript(bool reset, Point3d startPoint, Vector3d startVelocity, Brep bounds, double tolerance, double maxEdgeLength, ref object R, ref object P, ref object Trace)
+  {
+
+
+    if (reset){
+      location = startPoint;
+      boundaryBrep = bounds;
+      currentVelocity = startVelocity;
+      traceLine = new Polyline();
+      return;
+    }
+
+
+
+
+    double d = double.MaxValue;
+    double t = (tolerance == 0) ? doc.ModelAbsoluteTolerance : tolerance;
+
+    // Make a line of Max edge length from current velocity and location
+    //Polyline edgeFinder = new Polyline();
+    LineCurve edgeFinder = new LineCurve(location, location + currentVelocity);
+    //edgeFinder.Add(location);
+    //edgeFinder.Add(location + currentVelocity);
+
+    double? max_z = null;
+
+    //Curve[] overlap_curves;
+    Point3d[] inter_points;
+    Point3d first_intersection;
+    if (Intersection.CurveBrep(edgeFinder, boundaryBrep, tolerance, out overlap_curves, out inter_points))
+    {
+      if (inter_points.Length > 0)
+      {
+        // grab all the points resulting from the intersection.
+        //    1st set: points when there was no overlap
+        //    .Aggregate: closest point to location.
+
+
+        first_intersection = (from p in inter_points select p)
+          // This custom aggregate returns the min distance from location
+          .Aggregate((p1, p2) => p1.DistanceTo(location) < p2.DistanceTo(location) ? p1 : p2);
+      }
+
+      //if (overlap_curves.Length > 0){}
+    }
+
+
+    // first_intersection becomes our new location
+    
+    //Check if we're still in bounds
+    foreach(BrepFace f in bounds.Faces)
+    {
+      // short version:
+      double dist = f.DuplicateFace(false).ClosestPoint(location).DistanceTo(location);
+
+      if(dist < d)
+        d = dist;
+    }
+
+
+    if(d > t){
+      // We went outside the bounds
+
+      // Check where to go next.  We can change X or Y to get back in (unless we went out a corner).
+
+      // Try X first
+      // update temp location to the next step
+      double tempD = double.MaxValue;
+      Point3d tempLocation = location;
+      Vector3d tempVelocity = currentVelocity;
+
+      tempVelocity.X = -tempVelocity.X;
+      tempLocation += tempVelocity;
+
+      foreach(BrepFace f in bounds.Faces)
+      {
+        double tempDist = f.DuplicateFace(false).ClosestPoint(tempLocation).DistanceTo(tempLocation);
+
+        if(tempDist < tempD)
+          tempD = tempDist;
+      }
+
+      if(tempD <= t){
+        // We're back in. So use X
+        currentVelocity.X = -currentVelocity.X;
+
+      }
+      else{
+
+        // Still out.  Try changing Y.
+        tempD = double.MaxValue;
+        tempLocation = location;
+        tempVelocity = currentVelocity;
+
+        tempVelocity.Y = -tempVelocity.Y;
+        tempLocation += tempVelocity;
+
+        foreach(BrepFace f in bounds.Faces)
+        {
+          double tempDist = f.DuplicateFace(false).ClosestPoint(tempLocation).DistanceTo(tempLocation);
+
+          if(tempDist < tempD)
+            tempD = tempDist;
+        }
+
+        if(tempD <= t){
+          currentVelocity.Y = -currentVelocity.Y;
+        }
+        else {
+          // We're oddly out of a corner or something.
+          // We escaped.  No change in velocity.
+        }
+
+      }
+
+
+    }
+
+    // Update location of moving point with velocity
+    location += currentVelocity;
+
+    // Add current location to the footprint ployline
+    traceLine.Add(location);
+
+
+
+    //Output
+    R = bounds;
+    P = location;
+    Trace = traceLine;
+  }
+
+  // <Custom additional code> 
+  Point3d location = Point3d.Unset;
+  Brep boundaryBrep;
+  Vector3d currentVelocity = Vector3d.Unset;
+  Polyline traceLine = new Polyline();
+  // </Custom additional code> 
+}
